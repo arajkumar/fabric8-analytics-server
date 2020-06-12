@@ -1,56 +1,33 @@
-FROM registry.centos.org/centos/centos:7
+FROM registry.access.redhat.com/ubi8/ubi-minimal
+
+LABEL name="osa api server" \
+      description="Probable Vulnerability API server" \
+      email-ids="arajkuma@redhat.com" \
+      git-url="https://github.com/kubesecurity/osa-api-server" \
+      git-path="/" \
+      target-file="Dockerfile" \
+      app-license="GPL-3.0"
+
 
 ENV LANG=en_US.UTF-8 \
     F8A_WORKER_VERSION=58d3025 \
     F8A_AUTH_VERSION=5211e23 \
     F8A_UTILS=3bca34e
 
-RUN useradd -d /coreapi coreapi
 
-# https://copr.fedorainfracloud.org/coprs/fche/pcp/
-# https://copr.fedorainfracloud.org/coprs/msrb/mercator/
-COPY hack/_copr_fche_pcp.repo hack/_copr_msrb-mercator.repo /etc/yum.repos.d/
+COPY bayesian/ /app/bayesian/
+ADD ./requirements.txt /app/
 
-# python3-pycurl is needed for Amazon SQS (boto lib), we need CentOS' rpm - installing it from pip results in NSS errors
-RUN yum install -y epel-release &&\
-    yum --setopt=skip_missing_names_on_install=False install -y gcc patch git python36-pip python36-requests httpd httpd-devel python36-devel postgresql-devel redhat-rpm-config libxml2-devel libxslt-devel python36-pycurl pcp mercator openssl-devel &&\
-    yum clean all
-
-COPY ./requirements.txt /coreapi/
-RUN pushd /coreapi && \
-    python3.6 -m pip install -r requirements.txt && \
-    rm requirements.txt && \
-    popd
-
-COPY ./coreapi-httpd.conf /etc/httpd/conf.d/
-
-# Create & set pcp dirs
-RUN mkdir -p /etc/pcp /var/run/pcp /var/lib/pcp /var/log/pcp  && \
-    chgrp -R root /etc/pcp /var/run/pcp /var/lib/pcp /var/log/pcp && \
-    chmod -R g+rwX /etc/pcp /var/run/pcp /var/lib/pcp /var/log/pcp
-
-COPY ./ /coreapi
-RUN pushd /coreapi && \
-    python3.6 -m pip install --upgrade pip>=10.0.0 && pip3 install . &&\
-    popd
+RUN microdnf install python3 npm git && pip3 install --upgrade pip &&\
+    pip3 install -r /app/requirements.txt && rm /app/requirements.txt &&\
+    npm install -g semver-ranger
 
 RUN pip3 install git+https://github.com/fabric8-analytics/fabric8-analytics-worker.git@${F8A_WORKER_VERSION}
 RUN pip3 install git+https://github.com/fabric8-analytics/fabric8-analytics-auth.git@${F8A_AUTH_VERSION}
-RUN pip3 install git+https://github.com/fabric8-analytics/fabric8-analytics-utils.git@${F8A_UTILS}
 RUN pip3 install git+https://github.com/fabric8-analytics/fabric8-analytics-version-comparator.git#egg=f8a_version_comparator
+RUN pip3 install git+https://github.com/fabric8-analytics/fabric8-analytics-utils.git@${F8A_UTILS}
 
-# Required by the solver task in worker to resolve dependencies from package.json
-RUN npm install -g semver-ranger
+ADD scripts/entrypoint.sh /bin/entrypoint.sh
+RUN chmod +x /bin/entrypoint.sh
 
-COPY .git/ /tmp/.git
-# date and hash of last commit
-RUN cd /tmp/.git &&\
-    git show -s --format="COMMITTED_AT=%ai%nCOMMIT_HASH=%h%n" HEAD | tee /etc/coreapi-release &&\
-    rm -rf /tmp/.git/
-
-COPY hack/coreapi-server.sh hack/server+pmcd.sh /usr/bin/
-
-EXPOSE 44321
-
-CMD ["/usr/bin/server+pmcd.sh"]
-
+ENTRYPOINT ["/bin/entrypoint.sh"]
